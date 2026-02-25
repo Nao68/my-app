@@ -278,7 +278,7 @@ body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
 </div>
 
 <!-- Add/Edit Modal -->
-<div class="modal-overlay" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+<div class="modal-overlay" id="modal" style="display:none">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-title" id="modalTitle">🔖 ブックマークを追加</div>
     <div class="form-group">
@@ -325,7 +325,7 @@ body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
 </div>
 
 <!-- Tag Manager Modal -->
-<div class="modal-overlay" id="tagManagerModal" style="display:none" onclick="if(event.target===this)closeTagManager()">
+<div class="modal-overlay" id="tagManagerModal" style="display:none">
   <div class="modal" style="max-width:500px" onclick="event.stopPropagation()">
     <div class="modal-title">🏷️ タグ管理</div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:15px">⠿ をドラッグして並び替え。タグ名をクリックして編集できます。</p>
@@ -333,7 +333,7 @@ body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
     <div class="form-group">
       <label class="form-label">新しいタグを追加</label>
       <div style="display:flex;gap:8px">
-        <input class="form-input" type="text" id="newGlobalTagInput" placeholder="タグ名を入力..." style="flex:1" onkeydown="if(event.key==='Enter')addGlobalTag()">
+        <input class="form-input" type="text" id="newGlobalTagInput" placeholder="タグ名を入力..." style="flex:1">
         <button class="btn btn-primary" onclick="addGlobalTag()">追加</button>
       </div>
     </div>
@@ -345,7 +345,7 @@ body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
 </div>
 
 <!-- Bulk Tag Modal -->
-<div class="modal-overlay" id="bulkTagModal" style="display:none" onclick="if(event.target===this)document.getElementById('bulkTagModal').style.display='none'">
+<div class="modal-overlay" id="bulkTagModal" style="display:none">
   <div class="modal" style="max-width:420px" onclick="event.stopPropagation()">
     <div class="modal-title" id="bulkTagTitle">🏷️ タグを一括変更</div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">選択した操作を全選択済みブックマークに適用します</p>
@@ -840,8 +840,11 @@ function openTagManager(){
   normalizeTagOrder();
   renderTagManagerList();
   document.getElementById('tagManagerModal').style.display='flex';
-  document.getElementById('newGlobalTagInput').value='';
-  setTimeout(()=>document.getElementById('newGlobalTagInput').focus(),150);
+  const inp = document.getElementById('newGlobalTagInput');
+  inp.value='';
+  // onkeydownをJSで設定（HTML属性だとシングルクォートが壊れるため）
+  inp.onkeydown = e => { if(e.key==='Enter') addGlobalTag(); };
+  setTimeout(()=>inp.focus(),150);
 }
 function closeTagManager(){
   document.getElementById('tagManagerModal').style.display='none';
@@ -856,8 +859,9 @@ function applyAndCloseTagManager(){
 function renderTagManagerList(){
   const list=document.getElementById('tagManagerList');
   const allUsed=[...new Set([...PRESET_TAGS,...bookmarks.flatMap(b=>b.tags)])];
+  // tagOrderに登録済みのタグは全て表示（未使用でも）+ tagOrderにないがbookmarksで使われているタグも表示
   tmCurrentOrder=[
-    ...tagOrder.filter(t=>t!=='その他'&&(allUsed.includes(t)||PRESET_TAGS.includes(t))),
+    ...tagOrder.filter(t=>t!=='その他'),
     ...allUsed.filter(t=>t!=='その他'&&!tagOrder.includes(t)),
     'その他'
   ];
@@ -969,6 +973,10 @@ if(localStorage.getItem('bm_dark')==='1'){
   document.body.classList.add('dark');
   document.getElementById('darkModeBtn').textContent='☀️';
 }
+// モーダルoverlay clickをJSで登録（HTML属性内のシングルクォート問題を回避）
+document.getElementById('modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeModal(); });
+document.getElementById('tagManagerModal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeTagManager(); });
+document.getElementById('bulkTagModal').addEventListener('click', e=>{ if(e.target===e.currentTarget) document.getElementById('bulkTagModal').style.display='none'; });
 renderDropdown(); renderCards();
 </script>
 </body>
