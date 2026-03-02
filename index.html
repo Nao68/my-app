@@ -5,6 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bookmark Sorter</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="module">
+// Firebase初期化（モジュール形式）
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+import { getFirestore, collection, doc, setDoc, deleteDoc, getDocs, getDoc, writeBatch }
+  from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDfm_gGDBYC30ALqDDD1OK84EvZslF3DiY",
+  authDomain: "bookmark-sorter-d9e1a.firebaseapp.com",
+  projectId: "bookmark-sorter-d9e1a",
+  storageBucket: "bookmark-sorter-d9e1a.firebasestorage.app",
+  messagingSenderId: "161765931337",
+  appId: "1:161765931337:web:4a76a99e350a5303440298"
+};
+
+const fbApp  = initializeApp(firebaseConfig);
+const fbAuth = getAuth(fbApp);
+const fbDb   = getFirestore(fbApp);
+
+// グローバルに公開（メインスクリプトから呼べるように）
+window._fb = {
+  auth: fbAuth,
+  db:   fbDb,
+  GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+  collection, doc, setDoc, deleteDoc, getDocs, getDoc, writeBatch
+};
+window._fbReady = true;
+document.dispatchEvent(new Event('fb-ready'));
+</script>
 <style>
 :root {
   --bg:#eef2f7; --surface:#fff; --surface2:#f4f7fb;
@@ -200,10 +231,54 @@ body.dark .danger-chip{background:rgba(240,79,79,.15)!important;color:var(--red)
 .tag-manager-delete{width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text-muted);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
 .tag-manager-delete:hover{background:#fee2e2;border-color:var(--red);color:var(--red)}
 body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
+
+/* ── Auth UI ── */
+.auth-overlay{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center}
+.auth-card{background:var(--surface);border-radius:24px;padding:48px 40px;width:380px;max-width:92vw;text-align:center;box-shadow:var(--shadow-lg);border:1px solid var(--border)}
+.auth-logo{font-size:48px;margin-bottom:16px}
+.auth-title{font-size:24px;font-weight:700;margin-bottom:8px}
+.auth-sub{font-size:14px;color:var(--text-muted);margin-bottom:32px}
+.auth-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px 20px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;color:var(--text)}
+.auth-btn:hover{border-color:var(--accent);background:var(--accent-light);color:var(--accent)}
+.auth-btn img{width:20px;height:20px}
+.auth-error{margin-top:14px;font-size:13px;color:var(--red);min-height:18px}
+
+.user-chip{display:flex;align-items:center;gap:7px;padding:5px 10px 5px 5px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);cursor:pointer;transition:all .2s;margin-left:auto;flex-shrink:0}
+.user-chip:hover{border-color:var(--red);background:#fee2e2}
+.user-chip img{width:24px;height:24px;border-radius:50%;object-fit:cover}
+.user-chip span{font-size:13px;font-weight:500;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-chip .logout-hint{font-size:11px;color:var(--text-muted)}
+
+.sync-badge{position:fixed;bottom:90px;right:26px;background:#1e293b;color:#fff;padding:8px 14px;border-radius:20px;font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px;z-index:200;animation:fadeIn .2s ease;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+body.dark .sync-badge{background:#2a2f45}
 </style>
 </head>
 <body>
 <div id="app">
+
+<!-- Auth overlay (ログイン前に表示) -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <div class="auth-logo">🔖</div>
+    <div class="auth-title">Bookmark Sorter</div>
+    <div class="auth-sub">Googleアカウントでログインしてください</div>
+    <button class="auth-btn" id="loginBtn">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+      Googleでログイン
+    </button>
+    <div class="auth-error" id="authError"></div>
+  </div>
+</div>
+
+<!-- ユーザーchip（ヘッダーに動的挿入） -->
+<div class="user-chip" id="userChip" style="display:none" title="ログアウト">
+  <img id="userAvatar" src="" alt="">
+  <div>
+    <div class="user-chip span" id="userName"></div>
+    <div class="logout-hint">ログアウト</div>
+  </div>
+</div>
+
 
 <!-- Header -->
 <div class="header">
@@ -241,6 +316,8 @@ body.dark .tag-manager-delete:hover{background:rgba(240,79,79,.15)}
     <button class="hdr-btn" id="bulkToggleBtn" onclick="toggleBulkMode()">☑️ 一括編集</button>
     <!-- Dark mode -->
     <button class="hdr-btn hdr-btn-icon" id="darkModeBtn" onclick="toggleDarkMode()" title="ダークモード">🌙</button>
+    <!-- User chip -->
+    <div id="userChipSlot"></div>
   </div>
 </div>
 
@@ -391,7 +468,7 @@ function assignUniqueColor(tag) {
 }
 
 // ── State ──
-let bookmarks        = JSON.parse(localStorage.getItem('bm_v2') || '[]');
+let bookmarks        = [];  // IndexedDBから非同期ロード
 let tagOrder         = [];
 let editingId        = null;
 let selectedTag      = null;
@@ -406,8 +483,78 @@ let selectedIds      = new Set();
 let dragSrcIdx       = null;
 let tmCurrentOrder   = [];
 
+// ── IndexedDB ──
+const DB_NAME = 'BookmarkSorterDB';
+const DB_VER  = 1;
+const STORE   = 'bookmarks';
+let db = null;
+
+function openDB(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = e => {
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains(STORE)){
+        d.createObjectStore(STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbPut(bm){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(bm);
+    tx.oncomplete = resolve;
+    tx.onerror = e => reject(e.target.error);
+  });
+}
+
+function dbDelete(id){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = e => reject(e.target.error);
+  });
+}
+
+function dbGetAll(){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function save(){
+  if(!db) return;
+  for(const bm of bookmarks){ await dbPut(bm); }
+}
+// saveOne/removeOne/saveAll はFirebase版で上書き定義（後述）
+
+
+// ── 画像圧縮 ──
+function compressImage(dataUrl, maxSize=96, quality=0.75){
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      // 短辺をmaxSizeに収める
+      const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      canvas.width  = Math.round(img.width  * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.src = dataUrl;
+  });
+}
+
 // ── Helpers ──
-function save()       { localStorage.setItem('bm_v2', JSON.stringify(bookmarks)); }
 function generateId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
 function getInitials(t){ return (t||'?').substring(0,2).toUpperCase(); }
 function getDomain(u) { try{return new URL(u).hostname.replace('www.','')}catch{return u} }
@@ -426,6 +573,7 @@ function saveTagOrder(){
   tagOrder = [...tagOrder.filter(t=>t!=='その他'),'その他'];
   localStorage.setItem('bm_tag_order', JSON.stringify(tagOrder));
   localStorage.setItem('bm_tag_colors', JSON.stringify(TAG_COLORS));
+  fsSaveTagOrder(); // Firestoreにも保存
 }
 function loadTagOrder(){
   try{
@@ -595,19 +743,19 @@ document.getElementById('grid').addEventListener('click',function(e){
   if(action==='visit')  { bulkMode ? toggleSelect(id) : visitBookmark(id); }
 });
 
-function visitBookmark(id){
+async function visitBookmark(id){
   const b=bookmarks.find(x=>x.id===id); if(!b) return;
   b.visits=(b.visits||0)+1; b.lastVisited=new Date().toISOString();
-  save(); renderCards(); window.open(b.url,'_blank');
+  await saveOne(b); renderCards(); window.open(b.url,'_blank');
 }
-function toggleFav(id){
+async function toggleFav(id){
   const b=bookmarks.find(x=>x.id===id); if(!b) return;
-  b.favorite=!b.favorite; save(); renderCards();
+  b.favorite=!b.favorite; await saveOne(b); renderCards();
 }
-function deleteBookmark(id){
+async function deleteBookmark(id){
   if(!confirm('このブックマークを削除しますか？')) return;
   bookmarks=bookmarks.filter(b=>b.id!==id);
-  save(); renderDropdown(); renderCards();
+  await removeOne(id); renderDropdown(); renderCards();
 }
 
 // ── Add/Edit Modal ──
@@ -667,14 +815,19 @@ function onPhotoUpload(e){
   const file=e.target.files[0]; if(!file) return;
   if(!file.type.startsWith('image/')){ alert('画像ファイルを選択してください'); return; }
   const reader=new FileReader();
-  reader.onload=ev=>{
-    customImageData=ev.target.result; selectedIcon=null;
+  reader.onload=async ev=>{
+    // 圧縮（96×96px・JPEG75%）でlocalStorageもIndexedDBも節約
+    const compressed = await compressImage(ev.target.result, 96, 0.75);
+    customImageData=compressed; selectedIcon=null;
     const el=document.getElementById('previewIcon');
     el.innerHTML=''; el.style.backgroundImage='url('+customImageData+')';
     el.style.backgroundSize='cover'; el.style.backgroundPosition='center';
     el.style.border='2px solid var(--accent)';
+    const origKB  = Math.round(ev.target.result.length * 0.75 / 1024);
+    const compKB  = Math.round(compressed.length * 0.75 / 1024);
     document.getElementById('photoStatus').innerHTML=
       '<div style="font-size:12px;color:var(--green);margin-top:4px">✅ '+esc(file.name)+
+      ' <span style="font-size:11px;color:var(--text-muted)">('+origKB+'KB → '+compKB+'KB)</span>'+
       ' <span style="color:var(--red);cursor:pointer;margin-left:8px" onclick="clearPhoto()">× 削除</span></div>';
     renderIconPicker();
   };
@@ -756,20 +909,23 @@ function fetchSiteInfo(url){
   }
   status.innerHTML='<div class="url-loading" style="color:var(--green)">✅ '+domain+'</div>';
 }
-function saveBookmark(){
+async function saveBookmark(){
   const url=document.getElementById('urlInput').value.trim();
   const title=document.getElementById('titleInput').value.trim()||getDomain(url);
   if(!url){ alert('URLを入力してください'); return; }
   if(!url.startsWith('http')){ alert('URLはhttp://またはhttps://で始めてください'); return; }
   const faviconUrl=customImageData?null:currentFaviconUrl;
   const tagList=selectedTags.length?selectedTags:['その他'];
+  let bm;
   if(editingId){
-    const b=bookmarks.find(x=>x.id===editingId);
-    if(b){ b.url=url; b.title=title; b.icon=selectedIcon||'🌐'; b.tags=tagList; b.faviconUrl=faviconUrl; b.customImageData=customImageData||null; }
+    bm=bookmarks.find(x=>x.id===editingId);
+    if(bm){ bm.url=url; bm.title=title; bm.icon=selectedIcon||'🌐'; bm.tags=tagList; bm.faviconUrl=faviconUrl; bm.customImageData=customImageData||null; }
   } else {
-    bookmarks.push({id:generateId(),url,title,icon:selectedIcon||'🌐',tags:tagList,faviconUrl,customImageData:customImageData||null,visits:0,favorite:false,addedAt:new Date().toISOString(),lastVisited:null,color:'hsl('+Math.floor(Math.random()*360)+',60%,50%)'});
+    bm={id:generateId(),url,title,icon:selectedIcon||'🌐',tags:tagList,faviconUrl,customImageData:customImageData||null,visits:0,favorite:false,addedAt:new Date().toISOString(),lastVisited:null,color:'hsl('+Math.floor(Math.random()*360)+',60%,50%)'};
+    bookmarks.push(bm);
   }
-  save(); closeModal(); renderDropdown(); renderCards();
+  await saveOne(bm);
+  closeModal(); renderDropdown(); renderCards();
 }
 
 // ── Bulk edit ──
@@ -797,10 +953,12 @@ function updateBulkLabel(){
   const all=[...document.querySelectorAll('.card[data-id]')].map(c=>c.dataset.id);
   document.getElementById('selectAllChk').checked=all.length>0&&all.every(id=>selectedIds.has(id));
 }
-function bulkFavorite(val){
+async function bulkFavorite(val){
   if(!selectedIds.size) return;
-  bookmarks.forEach(b=>{ if(selectedIds.has(b.id)) b.favorite=val; });
-  save(); renderCards(); updateBulkLabel();
+  const targets=bookmarks.filter(b=>selectedIds.has(b.id));
+  targets.forEach(b=>b.favorite=val);
+  for(const b of targets) await saveOne(b);
+  renderCards(); updateBulkLabel();
 }
 function bulkDelete(){
   if(!selectedIds.size) return;
@@ -822,7 +980,7 @@ function openBulkTagModal(){
   ).join('');
   document.getElementById('bulkTagModal').style.display='flex';
 }
-function applyBulkTags(){
+async function applyBulkTags(){
   const add=[...document.querySelectorAll('#bulkAddTags .tag-chip.selected')].map(e=>e.dataset.tag);
   const remove=[...document.querySelectorAll('#bulkRemoveTags .tag-chip.selected')].map(e=>e.dataset.tag);
   bookmarks.forEach(b=>{
@@ -831,7 +989,9 @@ function applyBulkTags(){
     b.tags=b.tags.filter(t=>!remove.includes(t));
     if(!b.tags.length) b.tags=['その他'];
   });
-  save(); document.getElementById('bulkTagModal').style.display='none';
+  const changed=bookmarks.filter(b=>selectedIds.has(b.id));
+  for(const b of changed) await saveOne(b);
+  document.getElementById('bulkTagModal').style.display='none';
   renderDropdown(); renderCards();
 }
 
@@ -850,8 +1010,8 @@ function closeTagManager(){
   document.getElementById('tagManagerModal').style.display='none';
   renderDropdown(); renderTagChips();
 }
-function applyAndCloseTagManager(){
-  normalizeTagOrder(); saveTagOrder(); save();
+async function applyAndCloseTagManager(){
+  normalizeTagOrder(); saveTagOrder(); await saveAll();
   document.getElementById('tagManagerModal').style.display='none';
   renderDropdown(); renderCards(); renderTagChips();
 }
@@ -966,18 +1126,191 @@ function addGlobalTag(){
   renderTagManagerList(); renderDropdown(); renderTagChips();
 }
 
+
+// ── Firebase / Firestore sync ──
+let currentUser = null;  // ログイン中ユーザー
+
+function fsCol(){
+  // users/{uid}/bookmarks コレクション
+  return window._fb.collection(window._fb.db, 'users', currentUser.uid, 'bookmarks');
+}
+
+async function fsSaveOne(bm){
+  if(!currentUser) return;
+  try {
+    const d = window._fb.doc(window._fb.db, 'users', currentUser.uid, 'bookmarks', bm.id);
+    // customImageDataはFirestoreの1ドキュメント1MBの壁があるので分離して保存
+    await window._fb.setDoc(d, bm);
+  } catch(e){ console.error('fsSaveOne:', e); }
+}
+
+async function fsDeleteOne(id){
+  if(!currentUser) return;
+  try {
+    const d = window._fb.doc(window._fb.db, 'users', currentUser.uid, 'bookmarks', id);
+    await window._fb.deleteDoc(d);
+  } catch(e){ console.error('fsDeleteOne:', e); }
+}
+
+async function fsLoadAll(){
+  if(!currentUser) return [];
+  try {
+    const snap = await window._fb.getDocs(fsCol());
+    return snap.docs.map(d => d.data());
+  } catch(e){ console.error('fsLoadAll:', e); return []; }
+}
+
+async function fsSaveTagOrder(){
+  if(!currentUser) return;
+  try {
+    const d = window._fb.doc(window._fb.db, 'users', currentUser.uid, 'settings', 'tagOrder');
+    await window._fb.setDoc(d, { order: tagOrder, colors: TAG_COLORS });
+  } catch(e){ console.error('fsSaveTagOrder:', e); }
+}
+
+async function fsLoadSettings(){
+  if(!currentUser) return;
+  try {
+    const d = window._fb.doc(window._fb.db, 'users', currentUser.uid, 'settings', 'tagOrder');
+    const snap = await window._fb.getDoc(d);
+    if(snap.exists()){
+      const data = snap.data();
+      if(data.order) tagOrder = data.order;
+      if(data.colors) Object.assign(TAG_COLORS, data.colors);
+    }
+  } catch(e){ console.error('fsLoadSettings:', e); }
+}
+
+// 同期中バッジ表示
+function showSyncBadge(msg){
+  let el = document.getElementById('syncBadge');
+  if(!el){ el=document.createElement('div'); el.id='syncBadge'; el.className='sync-badge'; document.body.appendChild(el); }
+  el.innerHTML = msg;
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.remove(), 2000);
+}
+
+// ローカルIndexedDB + Firestore両方に保存
+async function saveOne(bm){
+  await dbPut(bm);           // IndexedDB（オフライン用）
+  await fsSaveOne(bm);       // Firestore（クラウド同期）
+}
+
+async function removeOne(id){
+  await dbDelete(id);
+  await fsDeleteOne(id);
+}
+
+async function saveAll(){
+  for(const bm of bookmarks){ await dbPut(bm); await fsSaveOne(bm); }
+}
+
 // ── Boot ──
-loadTagOrder();
-normalizeTagOrder();
+// ダークモードは認証前でも即時適用
 if(localStorage.getItem('bm_dark')==='1'){
   document.body.classList.add('dark');
   document.getElementById('darkModeBtn').textContent='☀️';
 }
-// モーダルoverlay clickをJSで登録（HTML属性内のシングルクォート問題を回避）
+
+// モーダルoverlay click登録
 document.getElementById('modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeModal(); });
 document.getElementById('tagManagerModal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeTagManager(); });
 document.getElementById('bulkTagModal').addEventListener('click', e=>{ if(e.target===e.currentTarget) document.getElementById('bulkTagModal').style.display='none'; });
-renderDropdown(); renderCards();
+
+// Firebase準備完了を待ってから認証処理
+async function initApp(){
+  // IndexedDB初期化
+  try { db = await openDB(); } catch(e){ console.error('IndexedDB:', e); }
+
+  const { auth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, getDoc, doc } = window._fb;
+
+  // ログインボタン
+  document.getElementById('loginBtn').addEventListener('click', async () => {
+    document.getElementById('authError').textContent = '';
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch(e) {
+      document.getElementById('authError').textContent = 'ログインに失敗しました: ' + e.message;
+    }
+  });
+
+  // ログアウト
+  document.getElementById('userChip').addEventListener('click', async () => {
+    if(!confirm('ログアウトしますか？')) return;
+    await signOut(auth);
+  });
+
+  // 認証状態監視
+  onAuthStateChanged(auth, async user => {
+    if(user){
+      // ログイン済み
+      currentUser = user;
+      document.getElementById('authOverlay').style.display = 'none';
+
+      // ユーザーチップ表示
+      const chip = document.getElementById('userChip');
+      chip.style.display = 'flex';
+      document.getElementById('userAvatar').src = user.photoURL || '';
+      document.getElementById('userName').textContent = user.displayName || user.email;
+      document.getElementById('userChipSlot').appendChild(chip);
+
+      // データ読み込み
+      document.getElementById('grid').innerHTML =
+        '<div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title" id="loadingMsg">データを読み込み中...</div></div>';
+
+      // Firestoreから読み込み（クラウドが優先）
+      const fsBms = await fsLoadAll();
+      if(fsBms.length > 0){
+        bookmarks = fsBms;
+        // IndexedDBにもキャッシュ
+        for(const bm of bookmarks) await dbPut(bm);
+      } else {
+        // Firestoreにデータなし → IndexedDBから読む（初回移行）
+        bookmarks = await dbGetAll();
+        // 旧localStorage移行
+        const old = localStorage.getItem('bm_v2');
+        if(old && bookmarks.length === 0){
+          const oldBMs = JSON.parse(old);
+          for(const bm of oldBMs){
+            if(bm.customImageData && bm.customImageData.length > 50000){
+              try { bm.customImageData = await compressImage(bm.customImageData, 96, 0.75); } catch(e){}
+            }
+            await dbPut(bm); await fsSaveOne(bm);
+          }
+          bookmarks = await dbGetAll();
+          localStorage.removeItem('bm_v2');
+        } else if(bookmarks.length > 0){
+          // IndexedDBのデータをFirestoreに同期
+          showSyncBadge('☁️ クラウドに同期中...');
+          for(const bm of bookmarks) await fsSaveOne(bm);
+          showSyncBadge('✅ 同期完了');
+        }
+      }
+
+      // タグ設定をFirestoreから復元（なければlocalStorage）
+      await fsLoadSettings();
+      loadTagOrder();
+      normalizeTagOrder();
+
+      renderDropdown(); renderCards();
+
+    } else {
+      // 未ログイン
+      currentUser = null;
+      document.getElementById('authOverlay').style.display = 'flex';
+      document.getElementById('userChip').style.display = 'none';
+      bookmarks = [];
+      renderDropdown(); renderCards();
+    }
+  });
+}
+
+// Firebase SDK読み込み完了を待つ
+if(window._fbReady){
+  initApp();
+} else {
+  document.addEventListener('fb-ready', initApp, { once: true });
+}
 </script>
 </body>
 </html>
