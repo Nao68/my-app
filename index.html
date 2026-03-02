@@ -1258,32 +1258,41 @@ async function initApp(){
       document.getElementById('grid').innerHTML =
         '<div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-title" id="loadingMsg">データを読み込み中...</div></div>';
 
-      // Firestoreから読み込み（クラウドが優先）
+      // アカウント切り替え検出 → IndexedDB古いデータをクリア
+      const lastUid = localStorage.getItem('bm_last_uid');
+      if(lastUid && lastUid !== user.uid){
+        const oldBms = await dbGetAll();
+        for(const bm of oldBms) await dbDelete(bm.id);
+      }
+      localStorage.setItem('bm_last_uid', user.uid);
+
+      // Firestoreから読み込み（必ずクラウド優先）
       const fsBms = await fsLoadAll();
       if(fsBms.length > 0){
         bookmarks = fsBms;
-        // IndexedDBにもキャッシュ
         for(const bm of bookmarks) await dbPut(bm);
       } else {
-        // Firestoreにデータなし → IndexedDBから読む（初回移行）
-        bookmarks = await dbGetAll();
-        // 旧localStorage移行
-        const old = localStorage.getItem('bm_v2');
-        if(old && bookmarks.length === 0){
-          const oldBMs = JSON.parse(old);
-          for(const bm of oldBMs){
-            if(bm.customImageData && bm.customImageData.length > 50000){
-              try { bm.customImageData = await compressImage(bm.customImageData, 96, 0.75); } catch(e){}
-            }
-            await dbPut(bm); await fsSaveOne(bm);
-          }
+        // Firestoreにデータなし（新規アカウント or 初回）
+        if(!lastUid || lastUid === user.uid){
           bookmarks = await dbGetAll();
-          localStorage.removeItem('bm_v2');
-        } else if(bookmarks.length > 0){
-          // IndexedDBのデータをFirestoreに同期
-          showSyncBadge('☁️ クラウドに同期中...');
-          for(const bm of bookmarks) await fsSaveOne(bm);
-          showSyncBadge('✅ 同期完了');
+          const oldLs = localStorage.getItem('bm_v2');
+          if(oldLs && bookmarks.length === 0){
+            const oldBMs = JSON.parse(oldLs);
+            for(const bm of oldBMs){
+              if(bm.customImageData && bm.customImageData.length > 50000){
+                try { bm.customImageData = await compressImage(bm.customImageData, 96, 0.75); } catch(e){}
+              }
+              await dbPut(bm); await fsSaveOne(bm);
+            }
+            bookmarks = await dbGetAll();
+            localStorage.removeItem('bm_v2');
+          } else if(bookmarks.length > 0){
+            showSyncBadge('☁️ クラウドに同期中...');
+            for(const bm of bookmarks) await fsSaveOne(bm);
+            showSyncBadge('✅ 同期完了');
+          }
+        } else {
+          bookmarks = [];
         }
       }
 
@@ -1295,11 +1304,19 @@ async function initApp(){
       renderDropdown(); renderCards();
 
     } else {
-      // 未ログイン
+      // 未ログイン（ログアウト時）
       currentUser = null;
+      // IndexedDBのキャッシュをクリア（次のアカウントに混入しないように）
+      try {
+        const oldBms = await dbGetAll();
+        for(const bm of oldBms) await dbDelete(bm.id);
+      } catch(e){}
+      // タグ設定もリセット
+      tagOrder = [];
+      TAG_COLORS = { AI:'#2563eb', DEVELOPMENT:'#059669', DESIGN:'#db2777', PRODUCTIVITY:'#d97706', NEWS:'#16a34a', SOCIAL:'#7c3aed', VIDEO:'#e63946', 'その他':'#6b7280' };
+      bookmarks = [];
       document.getElementById('authOverlay').style.display = 'flex';
       document.getElementById('userChip').style.display = 'none';
-      bookmarks = [];
       renderDropdown(); renderCards();
     }
   });
