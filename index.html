@@ -598,11 +598,12 @@ function normalizeTagOrder(){
   tagOrder=[...tagOrder.filter(t=>t!=='その他'),'その他'];
 }
 function getOrderedTags(){
+  // tagOrderに登録済みのタグは未使用でも全て含める（タグ管理で追加したタグが消えないように）
   const allUsed=[...new Set([...PRESET_TAGS,...bookmarks.flatMap(b=>b.tags)])];
   return [
-    ...tagOrder.filter(t=>t!=='その他'&&allUsed.includes(t)),
+    ...tagOrder.filter(t=>t!=='その他'),
     ...allUsed.filter(t=>t!=='その他'&&!tagOrder.includes(t)),
-    ...(allUsed.includes('その他')||PRESET_TAGS.includes('その他')?['その他']:[])
+    'その他'
   ];
 }
 
@@ -877,7 +878,8 @@ function addCustomTag(){
     renderDropdown();
   }
   if(!selectedTags.includes(tag)) selectedTags.push(tag);
-  inp.value=''; renderTagChips();
+  inp.value='';
+  renderTagChips();  // 即座に選択肢に反映
 }
 
 // URL input
