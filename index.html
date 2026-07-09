@@ -311,6 +311,18 @@ body.dark .sync-badge{background:#2a2f45}
     <button class="hdr-btn" onclick="openTagManager()">🏷️ タグ管理</button>
     <!-- Bulk edit -->
     <button class="hdr-btn" id="bulkToggleBtn" onclick="toggleBulkMode()">☑️ 一括編集</button>
+    <!-- Data menu -->
+    <div class="dropdown-wrapper" id="dataMenuWrapper">
+      <button class="hdr-btn" onclick="toggleDataMenu()">⚙️ データ</button>
+      <div class="dropdown-menu" id="dataMenu" style="display:none;right:0;left:auto;min-width:210px">
+        <div class="dropdown-item" onclick="openStatsModal()">📊 タグ統計</div>
+        <div class="dropdown-item" onclick="document.getElementById('importFile').click()">📥 Chromeブックマーク取込</div>
+        <div class="dropdown-item" onclick="exportJSON()">💾 JSONエクスポート</div>
+        <div class="dropdown-item" onclick="exportCSV()">📄 CSVエクスポート</div>
+        <div class="dropdown-item" onclick="checkAllLinks()">🔗 リンク切れチェック</div>
+      </div>
+      <input type="file" id="importFile" accept=".html,.htm" style="display:none" onchange="onImportChromeBookmarks(event)">
+    </div>
     <!-- Dark mode -->
     <button class="hdr-btn hdr-btn-icon" id="darkModeBtn" onclick="toggleDarkMode()" title="ダークモード">🌙</button>
     <!-- User chip -->
@@ -434,6 +446,41 @@ body.dark .sync-badge{background:#2a2f45}
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="document.getElementById('bulkTagModal').style.display='none'">キャンセル</button>
       <button class="btn btn-primary" onclick="applyBulkTags()">適用する</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stats Modal -->
+<div class="modal-overlay" id="statsModal" style="display:none">
+  <div class="modal" style="max-width:560px" onclick="event.stopPropagation()">
+    <div class="modal-title">📊 タグ統計</div>
+    <div id="statsContent"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="document.getElementById('statsModal').style.display='none'">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Result Modal -->
+<div class="modal-overlay" id="importModal" style="display:none">
+  <div class="modal" style="max-width:480px" onclick="event.stopPropagation()">
+    <div class="modal-title">📥 Chromeブックマーク取込</div>
+    <div id="importContent"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="importCancelBtn" onclick="document.getElementById('importModal').style.display='none'">閉じる</button>
+      <button class="btn btn-primary" id="importConfirmBtn" style="display:none" onclick="confirmImport()">取込を実行</button>
+    </div>
+  </div>
+</div>
+
+<!-- Link Check Modal -->
+<div class="modal-overlay" id="linkCheckModal" style="display:none">
+  <div class="modal" style="max-width:520px" onclick="event.stopPropagation()">
+    <div class="modal-title">🔗 リンク切れチェック</div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">ブラウザの仕様上、判定は目安です（正確な判定には対応していないサイトもあります）</p>
+    <div id="linkCheckContent"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="document.getElementById('linkCheckModal').style.display='none'">閉じる</button>
     </div>
   </div>
 </div>
@@ -1224,6 +1271,266 @@ async function removeOne(id){
 
 async function saveAll(){
   for(const bm of bookmarks){ await dbPut(bm); await fsSaveOne(bm); }
+}
+
+// ══════════════════════════════════════
+//  データメニュー（エクスポート/インポート/統計/リンクチェック）
+// ══════════════════════════════════════
+function toggleDataMenu(){
+  const m=document.getElementById('dataMenu');
+  const open=m.style.display!=='none';
+  m.style.display=open?'none':'block';
+  document.getElementById('dropdownMenu').style.display='none'; // タグメニューは閉じる
+}
+document.addEventListener('click', e=>{
+  if(!document.getElementById('dataMenuWrapper').contains(e.target)){
+    document.getElementById('dataMenu').style.display='none';
+  }
+});
+
+// ── JSON / CSV エクスポート ──
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportJSON(){
+  document.getElementById('dataMenu').style.display='none';
+  const data = { exportedAt: new Date().toISOString(), tagOrder, tagColors: TAG_COLORS, bookmarks };
+  downloadFile('bookmarks_'+fmtDate(new Date().toISOString()).replace(/\//g,'-')+'.json', JSON.stringify(data, null, 2), 'application/json');
+}
+
+function csvEscape(s){
+  s = String(s ?? '');
+  if(/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+function exportCSV(){
+  document.getElementById('dataMenu').style.display='none';
+  const header = ['タイトル','URL','タグ','お気に入り','訪問回数','追加日','最終訪問日'];
+  const rows = bookmarks.map(b => [
+    csvEscape(b.title), csvEscape(b.url), csvEscape(b.tags.join(';')),
+    b.favorite ? 'はい':'いいえ', b.visits||0, fmtDate(b.addedAt), b.lastVisited?fmtDate(b.lastVisited):''
+  ].join(','));
+  const csv = '\uFEFF' + header.join(',') + '\n' + rows.join('\n'); // BOM付きでExcel文字化け対策
+  downloadFile('bookmarks_'+fmtDate(new Date().toISOString()).replace(/\//g,'-')+'.csv', csv, 'text/csv');
+}
+
+// ── Chromeブックマーク取込（Netscape Bookmark HTML形式） ──
+let pendingImport = [];
+function onImportChromeBookmarks(e){
+  document.getElementById('dataMenu').style.display='none';
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = parseNetscapeBookmarks(ev.target.result);
+      showImportPreview(parsed);
+    } catch(err){
+      document.getElementById('importContent').innerHTML =
+        '<div style="color:var(--red);font-size:13px">読み込みに失敗しました。Chromeの「ブックマーク バー」→「ブックマークをエクスポート」で作成したHTMLファイルを選択してください。</div>';
+      document.getElementById('importModal').style.display='flex';
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function parseNetscapeBookmarks(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const anchors = doc.querySelectorAll('a');
+  const result = [];
+  anchors.forEach(a => {
+    const url = a.getAttribute('href');
+    const title = a.textContent.trim();
+    if(url && url.startsWith('http')) result.push({ url, title: title || getDomain(url) });
+  });
+  return result;
+}
+
+function showImportPreview(parsed){
+  pendingImport = parsed;
+  const existingUrls = new Set(bookmarks.map(b=>b.url));
+  const newOnes = parsed.filter(p => !existingUrls.has(p.url));
+  const dupCount = parsed.length - newOnes.length;
+  pendingImport = newOnes;
+
+  const content = document.getElementById('importContent');
+  if(parsed.length === 0){
+    content.innerHTML = '<div style="font-size:13px;color:var(--text-muted)">ブックマークが見つかりませんでした。</div>';
+    document.getElementById('importConfirmBtn').style.display='none';
+  } else {
+    content.innerHTML =
+      '<div style="font-size:13px;margin-bottom:10px">'+
+      '<strong>'+parsed.length+'件</strong> のブックマークを検出しました。<br>'+
+      (dupCount>0 ? '<span style="color:var(--text-muted)">うち '+dupCount+'件は既存URLと重複のためスキップされます。</span><br>' : '')+
+      '<strong style="color:var(--accent)">'+newOnes.length+'件</strong> を新規追加します。'+
+      '</div>'+
+      '<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:9px;padding:8px">'+
+      newOnes.slice(0,50).map(p=>'<div style="font-size:12px;padding:4px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.title)+'</div>').join('')+
+      (newOnes.length>50 ? '<div style="font-size:12px;color:var(--text-muted);padding:4px 2px">…他 '+(newOnes.length-50)+'件</div>' : '')+
+      '</div>';
+    document.getElementById('importConfirmBtn').style.display = newOnes.length>0 ? 'inline-block' : 'none';
+  }
+  document.getElementById('importModal').style.display='flex';
+}
+
+async function confirmImport(){
+  const btn = document.getElementById('importConfirmBtn');
+  btn.disabled = true; btn.textContent = '取込中...';
+  let count = 0;
+  for(const p of pendingImport){
+    const bm = {
+      id: generateId(), url: p.url, title: p.title, icon: '🌐',
+      tags: ['その他'], faviconUrl: getFaviconUrl(p.url), customImageData: null,
+      visits: 0, favorite: false, addedAt: new Date().toISOString(), lastVisited: null,
+      color: 'hsl('+Math.floor(Math.random()*360)+',60%,50%)'
+    };
+    bookmarks.push(bm);
+    await saveOne(bm);
+    count++;
+  }
+  btn.disabled = false; btn.textContent = '取込を実行';
+  document.getElementById('importModal').style.display='none';
+  pendingImport = [];
+  renderDropdown(); renderCards();
+  showSyncBadge('✅ '+count+'件を取り込みました');
+}
+
+// ── タグ統計ダッシュボード ──
+function openStatsModal(){
+  document.getElementById('dataMenu').style.display='none';
+  const content = document.getElementById('statsContent');
+
+  if(bookmarks.length === 0){
+    content.innerHTML = '<div style="font-size:13px;color:var(--text-muted)">まだブックマークがありません。</div>';
+    document.getElementById('statsModal').style.display='flex';
+    return;
+  }
+
+  // タグごとの件数集計
+  const tagCounts = {};
+  bookmarks.forEach(b => b.tags.forEach(t => { tagCounts[t] = (tagCounts[t]||0)+1; }));
+  const ordered = getOrderedTags().filter(t => tagCounts[t]);
+  const maxCount = Math.max(...Object.values(tagCounts), 1);
+
+  // 全体サマリー
+  const totalVisits = bookmarks.reduce((s,b)=>s+(b.visits||0),0);
+  const favCount = bookmarks.filter(b=>b.favorite).length;
+  const inactiveCount = bookmarks.filter(b=>daysSince(b.lastVisited)>=INACTIVE_DAYS).length;
+  const mostVisited = [...bookmarks].sort((a,b)=>(b.visits||0)-(a.visits||0))[0];
+
+  let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">';
+  html += statCard('📚', bookmarks.length, '合計ブックマーク');
+  html += statCard('⭐', favCount, 'お気に入り');
+  html += statCard('👆', totalVisits, '総訪問回数');
+  html += statCard('💤', inactiveCount, '未使用('+INACTIVE_DAYS+'日+)');
+  html += '</div>';
+
+  if(mostVisited && mostVisited.visits > 0){
+    html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">🏆 最もよく使うサイト：<strong style="color:var(--text)">'+esc(mostVisited.title)+'</strong>（'+mostVisited.visits+'回）</div>';
+  }
+
+  html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px">タグ別件数</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto">';
+  ordered.forEach(tag => {
+    const count = tagCounts[tag];
+    const pct = Math.round((count/maxCount)*100);
+    const color = getTagColor(tag);
+    html += '<div>'+
+      '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">'+
+        '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+color+';margin-right:5px"></span>'+esc(tag)+'</span>'+
+        '<span style="color:var(--text-muted)">'+count+'件</span>'+
+      '</div>'+
+      '<div style="height:8px;background:var(--border);border-radius:5px;overflow:hidden">'+
+        '<div style="height:100%;width:'+pct+'%;background:'+color+';border-radius:5px;transition:width .4s"></div>'+
+      '</div>'+
+    '</div>';
+  });
+  html += '</div>';
+
+  content.innerHTML = html;
+  document.getElementById('statsModal').style.display='flex';
+}
+function statCard(icon, num, label){
+  return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center">'+
+    '<div style="font-size:20px;margin-bottom:4px">'+icon+'</div>'+
+    '<div style="font-size:20px;font-weight:700">'+num+'</div>'+
+    '<div style="font-size:11px;color:var(--text-muted)">'+label+'</div>'+
+  '</div>';
+}
+
+// ── リンク切れチェック（簡易・ベストエフォート） ──
+async function checkAllLinks(){
+  document.getElementById('dataMenu').style.display='none';
+  const content = document.getElementById('linkCheckContent');
+  document.getElementById('linkCheckModal').style.display='flex';
+  content.innerHTML = '<div style="font-size:13px;display:flex;align-items:center;gap:8px"><span class="spinner"></span> チェック中... (0/'+bookmarks.length+')</div>';
+
+  const results = [];
+  let done = 0;
+  // 並列数を制限しつつチェック
+  const CONCURRENCY = 6;
+  const queue = [...bookmarks];
+
+  async function worker(){
+    while(queue.length){
+      const bm = queue.shift();
+      const status = await checkOneLink(bm.url);
+      results.push({ bm, status });
+      done++;
+      content.innerHTML = '<div style="font-size:13px;display:flex;align-items:center;gap:8px"><span class="spinner"></span> チェック中... ('+done+'/'+bookmarks.length+')</div>';
+    }
+  }
+  await Promise.all(Array.from({length:CONCURRENCY}, worker));
+
+  const broken = results.filter(r => r.status === 'error');
+  const unknown = results.filter(r => r.status === 'unknown');
+  const ok = results.filter(r => r.status === 'ok');
+
+  let html = '<div style="font-size:13px;margin-bottom:14px">'+
+    '✅ 正常 '+ok.length+'件　'+
+    (unknown.length ? '❓ 判定不能 '+unknown.length+'件　' : '')+
+    (broken.length ? '<span style="color:var(--red)">⚠️ 応答なし '+broken.length+'件</span>' : '')+
+    '</div>';
+
+  if(broken.length){
+    html += '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--red)">応答がなかったリンク：</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto">';
+    broken.forEach(r => {
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">'+
+        '<div style="min-width:0"><div style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.bm.title)+'</div>'+
+        '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(r.bm.url)+'</div></div>'+
+        '<button class="btn btn-ghost link-del-btn" style="padding:4px 10px;font-size:11px;flex-shrink:0" data-delid="'+r.bm.id+'">削除</button>'+
+      '</div>';
+    });
+    html += '</div>';
+  } else if(bookmarks.length > 0){
+    html += '<div style="font-size:13px;color:var(--green)">応答なしのリンクは見つかりませんでした！</div>';
+  }
+  content.innerHTML = html;
+  content.querySelectorAll('.link-del-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.dataset.delid;
+      await deleteBookmark(id);
+      btn.closest('div[style*="justify-content:space-between"]').remove();
+    });
+  });
+}
+
+function checkOneLink(url){
+  // ブラウザの制約上、no-corsでは正確なステータスコードは取得できないため
+  // 「リクエストが完了したか」「タイムアウト/ネットワークエラーか」で簡易判定する
+  return new Promise(resolve => {
+    const timeout = setTimeout(()=>resolve('unknown'), 6000);
+    fetch(url, { mode: 'no-cors', method: 'GET', cache: 'no-store' })
+      .then(()=>{ clearTimeout(timeout); resolve('ok'); })
+      .catch(()=>{ clearTimeout(timeout); resolve('error'); });
+  });
 }
 
 // ── Boot ──
